@@ -119,6 +119,7 @@ void setup() {
 void loop() {
     handleButtons();
     audio.loop();
+    tickSpectrum();
 }
 
 // ─── Audio event callbacks ────────────────────────────────────────────────────

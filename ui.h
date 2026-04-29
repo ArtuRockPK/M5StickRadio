@@ -10,6 +10,41 @@ extern String streamTitle;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+// Spectrum state
+static int specH[8] = {};  // current bar heights
+static int specT[8] = {};  // target bar heights
+
+static void drawSpectrum() {
+    const int SX = 185, SY = 24, MAXH = 16, BOT = 40, BW = 5, STRIDE = 6;
+    M5.Display.fillRect(SX, SY, 47, MAXH, TFT_BLACK);
+    bool playing = (streamTitle.length() > 0);
+    for (int i = 0; i < 8; i++) {
+        int h    = max(1, specH[i]);
+        int barX = SX + i * STRIDE;
+        uint32_t col = !playing      ? TFT_DARKGREY :
+                       (h <= 5      ? TFT_GREEN  :
+                       (h <= 11     ? TFT_YELLOW : TFT_RED));
+        M5.Display.fillRect(barX, BOT - h, BW, h, col);
+    }
+}
+
+static bool tickSpectrum() {
+    if (volumeMode) return false;
+    static unsigned long lastTick = 0;
+    unsigned long now = millis();
+    if (now - lastTick < 80) return false;
+    lastTick = now;
+    bool playing = (streamTitle.length() > 0);
+    bool changed = false;
+    for (int i = 0; i < 8; i++) {
+        specT[i] = playing ? (random(3) == 0 ? random(2, 17) : specT[i]) : 1;
+        if      (specH[i] < specT[i]) { specH[i]++; changed = true; }
+        else if (specH[i] > specT[i]) { specH[i]--; changed = true; }
+    }
+    if (changed) drawSpectrum();
+    return changed;
+}
+
 static void _volBar(int x, int y, int w, int h, int val, int maxVal) {
     M5.Display.fillRect(x, y, w, h, 0x2104);
     int fill = map(val, 0, maxVal, 0, w);
@@ -20,6 +55,7 @@ static void _volBar(int x, int y, int w, int h, int val, int maxVal) {
 // ── public API ───────────────────────────────────────────────────────────────
 
 void initDisplay() {
+    M5.Display.setRotation(3);  // landscape 240×135 for M5StickCPlus2
     M5.Display.fillScreen(TFT_BLACK);
 }
 
@@ -121,5 +157,6 @@ void drawUI() {
         snprintf(vl, sizeof(vl), "Vol%2d", volume);
         M5.Display.drawString(vl, 4, 100);
         _volBar(50, 98, W - 58, 12, volume, 21);
+        drawSpectrum();
     }
 }

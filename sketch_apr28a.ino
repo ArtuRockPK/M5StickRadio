@@ -6,8 +6,12 @@
  * Controls:
  *   A (single)  — next station
  *   B (single)  — previous station
- *   A (double)  — enter / exit volume mode
+ *   A (double)  — enter volume mode
  *   Volume mode: A = vol+,  B = vol-,  3s inactivity = auto-exit
+ *
+ * RTOS layout:
+ *   Core 0 — audioTask  : HTTP fetch + decode + I2S output (priority 2)
+ *   Core 1 — loop()     : buttons + display update         (priority 1)
  */
 #include "M5StickCPlus2.h"
 #include "Arduino.h"
@@ -26,26 +30,31 @@
 
 Audio audio;
 
-// Global state (shared with ui.h)
-int    currentStation = 0;
-int    volume         = 15;
-bool   volumeMode     = false;
-bool   isPlaying      = false;
-String streamTitle    = "";
+// ── Shared state (read/written from both cores) ───────────────────────────────
+volatile int  currentStation = 0;
+volatile int  volume         = 15;
+volatile bool volumeMode     = false;
+volatile bool isPlaying      = false;
+volatile bool uiDirty        = false;
+char          streamTitle[128] = "";   // written by Core 0, read by Core 1
 
-// Button A double-click tracking
+// ── RTOS ─────────────────────────────────────────────────────────────────────
+static QueueHandle_t stationQueue;     // carries int station index
+
+// ── Button state (Core 1 only, no volatile needed) ───────────────────────────
 static unsigned long lastPressA    = 0;
 static bool          pendingClickA = false;
 static unsigned long lastActivity  = 0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Called from Core 1 — puts idx into queue, audioTask does the blocking connect
 void connectStation(int idx) {
     currentStation = idx;
-    streamTitle    = "";
+    streamTitle[0] = '\0';
     isPlaying      = false;
-    drawUI();  // immediate feedback before HTTP request
-    audio.connecttohost(stations[idx].url);
+    uiDirty        = true;
+    xQueueOverwrite(stationQueue, &idx);   // overwrites any pending change
 }
 
 void handleButtons() {
@@ -54,43 +63,57 @@ void handleButtons() {
 
     if (M5.BtnA.wasPressed()) {
         if (volumeMode) {
-            volume = min(21, volume + 1);
-            audio.setVolume(volume);
+            int v = (int)volume + 1; if (v > 21) v = 21;
+            volume = v;
+            audio.setVolume(v);
             lastActivity = now;
-            drawUI();
+            uiDirty      = true;
         } else if (pendingClickA && (now - lastPressA < DOUBLE_CLICK_MS)) {
-            // Double click — enter volume mode
             pendingClickA = false;
             volumeMode    = true;
             lastActivity  = now;
-            drawUI();
+            uiDirty       = true;
         } else {
             pendingClickA = true;
             lastPressA    = now;
         }
     }
 
-    // Pending single click timed out → next station
+    // Single-click timeout → next station
     if (pendingClickA && !volumeMode && (now - lastPressA >= DOUBLE_CLICK_MS)) {
         pendingClickA = false;
-        connectStation((currentStation + 1) % STATION_COUNT);
+        connectStation(((int)currentStation + 1) % STATION_COUNT);
     }
 
     if (M5.BtnB.wasPressed()) {
         if (volumeMode) {
-            volume = max(0, volume - 1);
-            audio.setVolume(volume);
+            int v = (int)volume - 1; if (v < 0) v = 0;
+            volume = v;
+            audio.setVolume(v);
             lastActivity = now;
-            drawUI();
+            uiDirty      = true;
         } else {
-            connectStation((currentStation - 1 + STATION_COUNT) % STATION_COUNT);
+            connectStation(((int)currentStation - 1 + STATION_COUNT) % STATION_COUNT);
         }
     }
 
-    // Auto-exit volume mode after inactivity
     if (volumeMode && (now - lastActivity > VOLUME_TIMEOUT_MS)) {
         volumeMode = false;
-        drawUI();
+        uiDirty    = true;
+    }
+}
+
+// ─── Audio task — Core 0 ─────────────────────────────────────────────────────
+
+void audioTask(void *param) {
+    int idx;
+    for (;;) {
+        // Non-blocking check for a new station request
+        if (xQueueReceive(stationQueue, &idx, 0) == pdTRUE) {
+            audio.connecttohost(stations[idx].url);   // blocks here — fine on Core 0
+        }
+        audio.loop();
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
@@ -114,27 +137,60 @@ void setup() {
     }
 
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-    audio.setVolume(volume);
+    audio.setVolume((int)volume);
+
+    stationQueue = xQueueCreate(1, sizeof(int));
+    xTaskCreatePinnedToCore(audioTask, "audio", 8192, NULL, 2, NULL, 0);
+
     connectStation(0);
 }
 
+// Core 1 — buttons + display only, no audio.loop() here
 void loop() {
     handleButtons();
-    audio.loop();
     tickSpectrum();
+    if (uiDirty) {
+        uiDirty = false;
+        drawUI();
+    }
 }
 
-// ─── Audio event callbacks ────────────────────────────────────────────────────
+// ─── Audio callbacks — fired from audioTask (Core 0) ─────────────────────────
 
 void audio_showstreamtitle(const char *info) {
-    streamTitle = info;
-    drawUI();
+    strncpy(streamTitle, info, sizeof(streamTitle) - 1);
+    streamTitle[sizeof(streamTitle) - 1] = '\0';
+    isPlaying = true;
+    uiDirty   = true;
 }
-void audio_info(const char *info)        { Serial.println(info); }
+
+// audio_info fires for every status line — catches "decode", "kBit", "kHz"
+// which appear for all stream types even when bitrate callback is absent
+void audio_info(const char *info) {
+    if (!isPlaying &&
+        (strstr(info, "decode") != NULL ||
+         strstr(info, "kBit")   != NULL ||
+         strstr(info, "kHz")    != NULL)) {
+        isPlaying = true;
+        uiDirty   = true;
+    }
+    Serial.println(info);
+}
+
+void audio_bitrate(const char *info) {
+    isPlaying = true;
+    uiDirty   = true;
+    Serial.print("bps: "); Serial.println(info);
+}
+
+void audio_eof_mp3(const char *info) {
+    isPlaying = false;
+    uiDirty   = true;
+    Serial.print("eof: "); Serial.println(info);
+}
+
 void audio_id3data(const char *info)     { Serial.print("id3: ");  Serial.println(info); }
-void audio_eof_mp3(const char *info)     { isPlaying = false; drawUI(); Serial.print("eof: "); Serial.println(info); }
 void audio_showstation(const char *info) { Serial.print("stn: ");  Serial.println(info); }
-void audio_bitrate(const char *info)     { isPlaying = true;  drawUI(); Serial.print("bps: "); Serial.println(info); }
 void audio_commercial(const char *info)  { Serial.print("ad: ");   Serial.println(info); }
 void audio_icyurl(const char *info)      { Serial.print("url: ");  Serial.println(info); }
 void audio_lasthost(const char *info)    { Serial.print("host: "); Serial.println(info); }

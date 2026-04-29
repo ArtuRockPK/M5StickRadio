@@ -30,13 +30,13 @@
 
 Audio audio;
 
-// ── Shared state ─────────────────────────────────────────────────────────────
-volatile int           currentStation = 0;
-volatile int           volume         = 15;
-volatile bool          volumeMode     = false;
-volatile unsigned long connectMs      = 0;     // millis() of last connectStation call
-volatile bool          streamEnded    = false; // set by audio_eof_mp3
-char                   streamTitle[128] = "";
+// ── Shared state (read Core 1, written Core 0 + Core 1) ──────────────────────
+volatile int  currentStation = 0;
+volatile int  volume         = 15;
+volatile bool volumeMode     = false;
+volatile bool isPlaying      = false;  // set by audioTask via audio.isRunning()
+volatile bool uiDirty        = false;
+char          streamTitle[128] = "";
 
 // ── RTOS ─────────────────────────────────────────────────────────────────────
 static QueueHandle_t stationQueue;
@@ -46,16 +46,12 @@ static unsigned long lastPressA    = 0;
 static bool          pendingClickA = false;
 static unsigned long lastActivity  = 0;
 
-// ── uiDirty flag: only set for discrete events ──────────────────────────────
-volatile bool uiDirty = false;
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 void connectStation(int idx) {
     currentStation = idx;
     streamTitle[0] = '\0';
-    streamEnded    = false;
-    connectMs      = millis();
+    isPlaying      = false;
     uiDirty        = true;
     xQueueOverwrite(stationQueue, &idx);
 }
@@ -104,12 +100,29 @@ void handleButtons() {
 // ─── Audio task — Core 0 ─────────────────────────────────────────────────────
 
 void audioTask(void *param) {
-    int idx;
+    int  idx;
+    bool prevRunning = false;
+
     for (;;) {
         if (xQueueReceive(stationQueue, &idx, 0) == pdTRUE) {
+            // Signal "connecting" before blocking HTTP call
+            isPlaying    = false;
+            prevRunning  = false;
+            uiDirty      = true;
             audio.connecttohost(stations[idx].url);
         }
+
         audio.loop();
+
+        // audio.isRunning() is the authoritative source: true only when
+        // audio frames are actually being decoded and sent to I2S.
+        const bool running = audio.isRunning();
+        if (running != prevRunning) {
+            prevRunning = running;
+            isPlaying   = running;
+            uiDirty     = true;   // triggers drawUI() on Core 1
+        }
+
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
@@ -142,13 +155,12 @@ void setup() {
     connectStation(0);
 }
 
-// Core 1: buttons + display. audio.loop() lives in audioTask on Core 0.
 void loop() {
     handleButtons();
-    tickSpectrum();          // updates spectrum area every 80 ms independently
+    tickSpectrum();
     if (uiDirty) {
         uiDirty = false;
-        drawUI();            // full redraw only on state change events
+        drawUI();
     }
 }
 
@@ -159,13 +171,9 @@ void audio_showstreamtitle(const char *info) {
     streamTitle[sizeof(streamTitle) - 1] = '\0';
     uiDirty = true;
 }
-void audio_eof_mp3(const char *info) {
-    streamEnded = true;
-    uiDirty     = true;
-    Serial.print("eof: "); Serial.println(info);
-}
 void audio_info(const char *info)        { Serial.println(info); }
 void audio_id3data(const char *info)     { Serial.print("id3: ");  Serial.println(info); }
+void audio_eof_mp3(const char *info)     { Serial.print("eof: ");  Serial.println(info); }
 void audio_showstation(const char *info) { Serial.print("stn: ");  Serial.println(info); }
 void audio_bitrate(const char *info)     { Serial.print("bps: ");  Serial.println(info); }
 void audio_commercial(const char *info)  { Serial.print("ad: ");   Serial.println(info); }

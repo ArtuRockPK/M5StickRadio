@@ -3,55 +3,55 @@
 #include "stations.h"
 
 // Globals defined in sketch_apr28a.ino
-extern volatile int           currentStation;
-extern volatile int           volume;
-extern volatile bool          volumeMode;
-extern volatile unsigned long connectMs;
-extern volatile bool          streamEnded;
-extern volatile bool          uiDirty;
-extern char                   streamTitle[];
-
-// Returns true when we expect audio to be playing:
-// 2 s have passed since connectStation() and no EOF received.
-static inline bool isActive() {
-    if (streamEnded || connectMs == 0) return false;
-    return (millis() - connectMs) > 2000UL;
-}
+extern volatile int  currentStation;
+extern volatile int  volume;
+extern volatile bool volumeMode;
+extern volatile bool isPlaying;   // authoritative: set by audio.isRunning() in audioTask
+extern volatile bool uiDirty;
+extern char          streamTitle[];
 
 // ── Spectrum ──────────────────────────────────────────────────────────────────
 static int specH[8] = {};
 static int specT[8] = {};
 
-// Draws ONLY the 8-bar area — does NOT clear the rest of the screen.
+// Redraws only the 8-bar zone (x=185..231, y=24..40). Never clears outside it.
 static void drawSpectrum() {
-    const int SX = 185, SY = 24, MAXH = 16, BOT = 40, BW = 5, STRIDE = 6;
-    const bool playing = isActive();
-    // Clear just the spectrum zone
+    const int SX     = 185;
+    const int SY     = 24;
+    const int MAXH   = 16;
+    const int BOT    = SY + MAXH;   // 40
+    const int BW     = 5;
+    const int STRIDE = 6;
+
     M5.Display.fillRect(SX, SY, 47, MAXH, TFT_BLACK);
+
+    const bool playing = isPlaying;
     for (int i = 0; i < 8; i++) {
-        int h    = specH[i] < 1 ? 1 : specH[i];
-        int barX = SX + i * STRIDE;
-        uint32_t col = !playing ? TFT_DARKGREY :
-                       h <= 5  ? TFT_GREEN    :
-                       h <= 11 ? TFT_YELLOW   : TFT_RED;
+        const int h    = specH[i] < 1 ? 1 : specH[i];
+        const int barX = SX + i * STRIDE;
+        const uint32_t col = !playing ? TFT_DARKGREY :
+                              h <= 5  ? TFT_GREEN    :
+                              h <= 11 ? TFT_YELLOW   : TFT_RED;
         M5.Display.fillRect(barX, BOT - h, BW, h, col);
     }
 }
 
-// Called every loop() — updates bar heights every 80 ms and redraws spectrum.
-// Must NOT be called while volumeMode (it would draw over the volume screen).
+// Called every loop() on Core 1. Updates bar heights every 80 ms.
+// Does not draw while volumeMode (would overwrite the volume screen).
 static bool tickSpectrum() {
     if (volumeMode) return false;
+
     static unsigned long lastTick = 0;
     const unsigned long  now      = millis();
     if (now - lastTick < 80UL) return false;
     lastTick = now;
 
-    const bool playing = isActive();
+    const bool playing = isPlaying;
     bool changed = false;
     for (int i = 0; i < 8; i++) {
         if (playing) { if (random(3) == 0) specT[i] = random(2, 17); }
         else         { specT[i] = 1; }
+
         if      (specH[i] < specT[i]) { specH[i]++; changed = true; }
         else if (specH[i] > specT[i]) { specH[i]--; changed = true; }
     }
@@ -59,7 +59,7 @@ static bool tickSpectrum() {
     return changed;
 }
 
-// ── Volume bar ────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 static void _volBar(int x, int y, int w, int h, int val, int maxVal) {
     M5.Display.fillRect(x, y, w, h, 0x2104);
     int fill = map(val, 0, maxVal, 0, w);
@@ -94,8 +94,8 @@ void drawConnectingProgress(int dots) {
     M5.Display.drawString(buf, M5.Display.width() / 2, M5.Display.height() / 2 + 28);
 }
 
-// Full UI redraw. Spectrum zone is left blank here —
-// tickSpectrum() redraws it independently within 80 ms.
+// Full redraw triggered by uiDirty. Spectrum zone (x=185..231, y=24..40)
+// is intentionally left blank — tickSpectrum() fills it within 80 ms.
 void drawUI() {
     const int W = M5.Display.width();
 
@@ -143,7 +143,7 @@ void drawUI() {
         M5.Display.setTextColor(TFT_WHITE, TFT_RED);
         M5.Display.drawString(stations[currentStation].lang, W - 14, 9);
 
-        // Station name (max 15 chars, same row as spectrum)
+        // Station name — max 15 chars, leaves x=185..239 free for spectrum
         M5.Display.setTextDatum(TL_DATUM);
         M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
         M5.Display.setTextSize(2);
@@ -153,18 +153,16 @@ void drawUI() {
         nameBuf[15] = '\0';
         if (strlen(nameRaw) > 15) nameBuf[14] = '~';
         M5.Display.drawString(nameBuf, 4, 24);
-        // Note: spectrum zone x=185..231, y=24..40 is intentionally left blank here.
-        // tickSpectrum() will fill it within 80 ms.
 
-        // Stream title or status
+        // Stream title / status line (isPlaying set by audio.isRunning())
         M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
         M5.Display.setTextSize(1);
         const char *src = (streamTitle[0] != '\0') ? streamTitle :
-                          (isActive()              ? "On Air"       : "Connecting...");
+                          (isPlaying               ? "On Air"        : "Connecting...");
         char tbuf[40];
         strncpy(tbuf, src, 37);
         tbuf[37] = '\0';
-        if (strlen(src) > 37) { tbuf[36] = '~'; }
+        if (strlen(src) > 37) tbuf[36] = '~';
         M5.Display.drawString(tbuf, 4, 58);
 
         // Station counter

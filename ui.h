@@ -6,6 +6,7 @@
 extern int    currentStation;
 extern int    volume;
 extern bool   volumeMode;
+extern bool   isPlaying;
 extern String streamTitle;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -17,7 +18,7 @@ static int specT[8] = {};  // target bar heights
 static void drawSpectrum() {
     const int SX = 185, SY = 24, MAXH = 16, BOT = 40, BW = 5, STRIDE = 6;
     M5.Display.fillRect(SX, SY, 47, MAXH, TFT_BLACK);
-    bool playing = (streamTitle.length() > 0);
+    bool playing = isPlaying;
     for (int i = 0; i < 8; i++) {
         int h    = max(1, specH[i]);
         int barX = SX + i * STRIDE;
@@ -34,7 +35,7 @@ static bool tickSpectrum() {
     unsigned long now = millis();
     if (now - lastTick < 80) return false;
     lastTick = now;
-    bool playing = (streamTitle.length() > 0);
+    bool playing = isPlaying;
     bool changed = false;
     for (int i = 0; i < 8; i++) {
         specT[i] = playing ? (random(3) == 0 ? random(2, 17) : specT[i]) : 1;
@@ -142,7 +143,8 @@ void drawUI() {
         // Stream title
         M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
         M5.Display.setTextSize(1);
-        String t = streamTitle.length() > 0 ? streamTitle : "Buffering...";
+        String t = streamTitle.length() > 0 ? streamTitle :
+                   (isPlaying ? "On Air" : "Connecting...");
         if (t.length() > 37) t = t.substring(0, 36) + "~";
         M5.Display.drawString(t, 4, 58);
 

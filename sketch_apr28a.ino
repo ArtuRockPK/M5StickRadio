@@ -30,6 +30,7 @@ Audio audio;
 int    currentStation = 0;
 int    volume         = 15;
 bool   volumeMode     = false;
+bool   isPlaying      = false;
 String streamTitle    = "";
 
 // Button A double-click tracking
@@ -42,6 +43,7 @@ static unsigned long lastActivity  = 0;
 void connectStation(int idx) {
     currentStation = idx;
     streamTitle    = "";
+    isPlaying      = false;
     drawUI();  // immediate feedback before HTTP request
     audio.connecttohost(stations[idx].url);
 }
@@ -130,9 +132,9 @@ void audio_showstreamtitle(const char *info) {
 }
 void audio_info(const char *info)        { Serial.println(info); }
 void audio_id3data(const char *info)     { Serial.print("id3: ");  Serial.println(info); }
-void audio_eof_mp3(const char *info)     { Serial.print("eof: ");  Serial.println(info); }
+void audio_eof_mp3(const char *info)     { isPlaying = false; drawUI(); Serial.print("eof: "); Serial.println(info); }
 void audio_showstation(const char *info) { Serial.print("stn: ");  Serial.println(info); }
-void audio_bitrate(const char *info)     { Serial.print("bps: ");  Serial.println(info); }
+void audio_bitrate(const char *info)     { isPlaying = true;  drawUI(); Serial.print("bps: "); Serial.println(info); }
 void audio_commercial(const char *info)  { Serial.print("ad: ");   Serial.println(info); }
 void audio_icyurl(const char *info)      { Serial.print("url: ");  Serial.println(info); }
 void audio_lasthost(const char *info)    { Serial.print("host: "); Serial.println(info); }

@@ -3,46 +3,55 @@
 #include "stations.h"
 
 // Globals defined in sketch_apr28a.ino
-extern volatile int  currentStation;
-extern volatile int  volume;
-extern volatile bool volumeMode;
-extern volatile bool isPlaying;
-extern volatile bool uiDirty;
-extern char          streamTitle[];    // char[128], written by Core 0
+extern volatile int           currentStation;
+extern volatile int           volume;
+extern volatile bool          volumeMode;
+extern volatile unsigned long connectMs;
+extern volatile bool          streamEnded;
+extern volatile bool          uiDirty;
+extern char                   streamTitle[];
 
-// ── Spectrum state ────────────────────────────────────────────────────────────
+// Returns true when we expect audio to be playing:
+// 2 s have passed since connectStation() and no EOF received.
+static inline bool isActive() {
+    if (streamEnded || connectMs == 0) return false;
+    return (millis() - connectMs) > 2000UL;
+}
+
+// ── Spectrum ──────────────────────────────────────────────────────────────────
 static int specH[8] = {};
 static int specT[8] = {};
 
+// Draws ONLY the 8-bar area — does NOT clear the rest of the screen.
 static void drawSpectrum() {
     const int SX = 185, SY = 24, MAXH = 16, BOT = 40, BW = 5, STRIDE = 6;
+    const bool playing = isActive();
+    // Clear just the spectrum zone
     M5.Display.fillRect(SX, SY, 47, MAXH, TFT_BLACK);
-    const bool playing = isPlaying;
     for (int i = 0; i < 8; i++) {
         int h    = specH[i] < 1 ? 1 : specH[i];
         int barX = SX + i * STRIDE;
-        uint32_t col = !playing   ? TFT_DARKGREY :
-                       h <= 5    ? TFT_GREEN  :
-                       h <= 11   ? TFT_YELLOW : TFT_RED;
+        uint32_t col = !playing ? TFT_DARKGREY :
+                       h <= 5  ? TFT_GREEN    :
+                       h <= 11 ? TFT_YELLOW   : TFT_RED;
         M5.Display.fillRect(barX, BOT - h, BW, h, col);
     }
 }
 
+// Called every loop() — updates bar heights every 80 ms and redraws spectrum.
+// Must NOT be called while volumeMode (it would draw over the volume screen).
 static bool tickSpectrum() {
     if (volumeMode) return false;
     static unsigned long lastTick = 0;
     const unsigned long  now      = millis();
-    if (now - lastTick < 80) return false;
+    if (now - lastTick < 80UL) return false;
     lastTick = now;
 
-    const bool playing = isPlaying;
+    const bool playing = isActive();
     bool changed = false;
     for (int i = 0; i < 8; i++) {
-        if (playing) {
-            if (random(3) == 0) specT[i] = random(2, 17);
-        } else {
-            specT[i] = 1;
-        }
+        if (playing) { if (random(3) == 0) specT[i] = random(2, 17); }
+        else         { specT[i] = 1; }
         if      (specH[i] < specT[i]) { specH[i]++; changed = true; }
         else if (specH[i] > specT[i]) { specH[i]--; changed = true; }
     }
@@ -50,7 +59,7 @@ static bool tickSpectrum() {
     return changed;
 }
 
-// ── Volume bar helper ─────────────────────────────────────────────────────────
+// ── Volume bar ────────────────────────────────────────────────────────────────
 static void _volBar(int x, int y, int w, int h, int val, int maxVal) {
     M5.Display.fillRect(x, y, w, h, 0x2104);
     int fill = map(val, 0, maxVal, 0, w);
@@ -61,7 +70,7 @@ static void _volBar(int x, int y, int w, int h, int val, int maxVal) {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void initDisplay() {
-    M5.Display.setRotation(3);  // landscape 240×135 for M5StickCPlus2
+    M5.Display.setRotation(3);
     M5.Display.fillScreen(TFT_BLACK);
 }
 
@@ -85,9 +94,10 @@ void drawConnectingProgress(int dots) {
     M5.Display.drawString(buf, M5.Display.width() / 2, M5.Display.height() / 2 + 28);
 }
 
+// Full UI redraw. Spectrum zone is left blank here —
+// tickSpectrum() redraws it independently within 80 ms.
 void drawUI() {
     const int W = M5.Display.width();
-    const int H = M5.Display.height();
 
     M5.Display.fillScreen(TFT_BLACK);
 
@@ -119,19 +129,21 @@ void drawUI() {
 
     } else {
         // ── Normal mode ──────────────────────────────────────────────────────
+
+        // Header
         M5.Display.fillRect(0, 0, W, 18, TFT_NAVY);
         M5.Display.setTextDatum(TL_DATUM);
         M5.Display.setTextColor(TFT_DARKGREY, TFT_NAVY);
         M5.Display.setTextSize(1);
         M5.Display.drawString("A:Next  B:Prev  2xA:Vol", 4, 5);
 
-        // Language / genre badge
+        // Genre/lang badge
         M5.Display.fillRect(W - 28, 0, 28, 18, TFT_RED);
         M5.Display.setTextDatum(MC_DATUM);
         M5.Display.setTextColor(TFT_WHITE, TFT_RED);
         M5.Display.drawString(stations[currentStation].lang, W - 14, 9);
 
-        // Station name (max 15 chars)
+        // Station name (max 15 chars, same row as spectrum)
         M5.Display.setTextDatum(TL_DATUM);
         M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
         M5.Display.setTextSize(2);
@@ -139,18 +151,20 @@ void drawUI() {
         char nameBuf[17];
         strncpy(nameBuf, nameRaw, 15);
         nameBuf[15] = '\0';
-        if (strlen(nameRaw) > 15) { nameBuf[14] = '~'; }
+        if (strlen(nameRaw) > 15) nameBuf[14] = '~';
         M5.Display.drawString(nameBuf, 4, 24);
+        // Note: spectrum zone x=185..231, y=24..40 is intentionally left blank here.
+        // tickSpectrum() will fill it within 80 ms.
 
-        // Stream title / status
+        // Stream title or status
         M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
         M5.Display.setTextSize(1);
         const char *src = (streamTitle[0] != '\0') ? streamTitle :
-                          (isPlaying ? "On Air" : "Connecting...");
+                          (isActive()              ? "On Air"       : "Connecting...");
         char tbuf[40];
         strncpy(tbuf, src, 37);
         tbuf[37] = '\0';
-        if (strlen(src) > 37) { tbuf[36] = '~'; tbuf[37] = '\0'; }
+        if (strlen(src) > 37) { tbuf[36] = '~'; }
         M5.Display.drawString(tbuf, 4, 58);
 
         // Station counter
@@ -159,12 +173,10 @@ void drawUI() {
         snprintf(pos, sizeof(pos), "%d / %d", (int)currentStation + 1, STATION_COUNT);
         M5.Display.drawString(pos, 4, 74);
 
-        // Volume label + bar
+        // Volume
         char vl[8];
         snprintf(vl, sizeof(vl), "Vol%2d", (int)volume);
         M5.Display.drawString(vl, 4, 100);
         _volBar(50, 98, W - 58, 12, (int)volume, 21);
-
-        drawSpectrum();
     }
 }

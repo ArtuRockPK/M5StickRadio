@@ -28,11 +28,12 @@ Internet radio player for **M5StickCPlus2** (ESP32). Streams MP3/AAC stations ov
 | Component | Description |
 |-----------|-------------|
 | **M5StickCPlus2** | ESP32 · 240 MHz · 240×135 TFT |
+| **PCM5102 DAC module** | I2S audio DAC — required for sound output |
 | Button **A** | Next station / volume up |
 | Button **B** | Previous station / volume down |
-| I2S BCLK | GPIO 26 |
-| I2S LRC  | GPIO 0  |
-| I2S DOUT | GPIO 25 |
+| I2S BCLK | GPIO 26 → PCM5102 BCK |
+| I2S LRC  | GPIO 0  → PCM5102 LCK |
+| I2S DOUT | GPIO 25 → PCM5102 DIN |
 
 ### Button Controls
 
@@ -137,11 +138,12 @@ The IP address is shown on the device screen after connecting to Wi-Fi.
 | Компонент | Описание |
 |-----------|----------|
 | **M5StickCPlus2** | ESP32 · 240 МГц · 240×135 TFT |
+| **Модуль PCM5102 DAC** | I2S ЦАП — необходим для вывода звука |
 | Кнопка **A** | Следующая станция / громкость + |
 | Кнопка **B** | Предыдущая станция / громкость − |
-| I2S BCLK | GPIO 26 |
-| I2S LRC  | GPIO 0  |
-| I2S DOUT | GPIO 25 |
+| I2S BCLK | GPIO 26 → PCM5102 BCK |
+| I2S LRC  | GPIO 0  → PCM5102 LCK |
+| I2S DOUT | GPIO 25 → PCM5102 DIN |
 
 ### Управление кнопками
 

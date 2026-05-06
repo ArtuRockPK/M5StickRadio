@@ -1,25 +1,25 @@
 #pragma once
 #include "M5StickCPlus2.h"
-#include "stations.h"
+#include "station_store.h"
 
 // Globals defined in sketch_apr28a.ino
 extern volatile int  currentStation;
 extern volatile int  volume;
 extern volatile bool volumeMode;
-extern volatile bool isPlaying;   // authoritative: set by audio.isRunning() in audioTask
+extern volatile bool isPlaying;
 extern volatile bool uiDirty;
 extern char          streamTitle[];
+extern char          deviceIP[];
 
 // ── Spectrum ──────────────────────────────────────────────────────────────────
 static int specH[8] = {};
 static int specT[8] = {};
 
-// Redraws only the 8-bar zone (x=185..231, y=24..40). Never clears outside it.
 static void drawSpectrum() {
     const int SX     = 185;
     const int SY     = 24;
     const int MAXH   = 16;
-    const int BOT    = SY + MAXH;   // 40
+    const int BOT    = SY + MAXH;
     const int BW     = 5;
     const int STRIDE = 6;
 
@@ -36,8 +36,6 @@ static void drawSpectrum() {
     }
 }
 
-// Called every loop() on Core 1. Updates bar heights every 80 ms.
-// Does not draw while volumeMode (would overwrite the volume screen).
 static bool tickSpectrum() {
     if (volumeMode) return false;
 
@@ -74,6 +72,7 @@ void initDisplay() {
     M5.Display.fillScreen(TFT_BLACK);
 }
 
+// Shown while connecting to saved WiFi
 void drawConnecting() {
     M5.Display.fillScreen(TFT_BLACK);
     M5.Display.setTextDatum(MC_DATUM);
@@ -94,8 +93,40 @@ void drawConnectingProgress(int dots) {
     M5.Display.drawString(buf, M5.Display.width() / 2, M5.Display.height() / 2 + 28);
 }
 
-// Full redraw triggered by uiDirty. Spectrum zone (x=185..231, y=24..40)
-// is intentionally left blank — tickSpectrum() fills it within 80 ms.
+// Shown when no saved credentials — AP captive portal is running
+void drawAPMode() {
+    const int W = M5.Display.width();
+    const int H = M5.Display.height();
+    M5.Display.fillScreen(TFT_BLACK);
+
+    // Orange header
+    M5.Display.fillRect(0, 0, W, 18, 0xFD20);
+    M5.Display.setTextDatum(MC_DATUM);
+    M5.Display.setTextColor(TFT_WHITE, 0xFD20);
+    M5.Display.setTextSize(1);
+    M5.Display.drawString("WiFi Setup", W / 2, 9);
+
+    M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    M5.Display.setTextSize(1);
+    M5.Display.drawString("Connect your phone to:", W / 2, 32);
+
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.setTextSize(2);
+    M5.Display.drawString("RadioSetup", W / 2, 52);
+
+    M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    M5.Display.setTextSize(1);
+    M5.Display.drawString("(open, no password)", W / 2, 72);
+
+    M5.Display.drawString("Then open in browser:", W / 2, 90);
+
+    M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+    M5.Display.setTextSize(1);
+    M5.Display.drawString("192.168.4.1", W / 2, 108);
+    (void)H;
+}
+
+// Main radio UI — triggered by uiDirty
 void drawUI() {
     const int W = M5.Display.width();
 
@@ -109,10 +140,11 @@ void drawUI() {
         M5.Display.setTextSize(1);
         M5.Display.drawString("VOLUME    A: +    B: -    3s: exit", W / 2, 11);
 
+        StationEntry cur = getStation((int)currentStation);
         M5.Display.setTextDatum(TL_DATUM);
         M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
         M5.Display.setTextSize(1);
-        M5.Display.drawString(stations[currentStation].name, 6, 30);
+        M5.Display.drawString(cur.name, 6, 30);
 
         M5.Display.setTextDatum(MC_DATUM);
         M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -130,6 +162,8 @@ void drawUI() {
     } else {
         // ── Normal mode ──────────────────────────────────────────────────────
 
+        StationEntry cur = getStation((int)currentStation);
+
         // Header
         M5.Display.fillRect(0, 0, W, 18, TFT_NAVY);
         M5.Display.setTextDatum(TL_DATUM);
@@ -141,20 +175,19 @@ void drawUI() {
         M5.Display.fillRect(W - 28, 0, 28, 18, TFT_RED);
         M5.Display.setTextDatum(MC_DATUM);
         M5.Display.setTextColor(TFT_WHITE, TFT_RED);
-        M5.Display.drawString(stations[currentStation].lang, W - 14, 9);
+        M5.Display.drawString(cur.lang, W - 14, 9);
 
         // Station name — max 15 chars, leaves x=185..239 free for spectrum
+        char nameBuf[17];
+        strncpy(nameBuf, cur.name, 15);
+        nameBuf[15] = '\0';
+        if (strlen(cur.name) > 15) nameBuf[14] = '~';
         M5.Display.setTextDatum(TL_DATUM);
         M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
         M5.Display.setTextSize(2);
-        const char *nameRaw = stations[currentStation].name;
-        char nameBuf[17];
-        strncpy(nameBuf, nameRaw, 15);
-        nameBuf[15] = '\0';
-        if (strlen(nameRaw) > 15) nameBuf[14] = '~';
         M5.Display.drawString(nameBuf, 4, 24);
 
-        // Stream title / status line (isPlaying set by audio.isRunning())
+        // Stream title / status
         M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
         M5.Display.setTextSize(1);
         const char *src = (streamTitle[0] != '\0') ? streamTitle :
@@ -167,13 +200,20 @@ void drawUI() {
 
         // Station counter
         M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
-        char pos[14];
-        snprintf(pos, sizeof(pos), "%d / %d", (int)currentStation + 1, STATION_COUNT);
+        char pos[16];
+        snprintf(pos, sizeof(pos), "%d / %d", (int)currentStation + 1, getTotalStationCount());
         M5.Display.drawString(pos, 4, 74);
+
+        // IP address (web admin hint)
+        if (deviceIP[0] != '\0') {
+            M5.Display.setTextColor(0x4208, TFT_BLACK);   // dim grey
+            M5.Display.drawString(deviceIP, 4, 86);
+        }
 
         // Volume
         char vl[8];
         snprintf(vl, sizeof(vl), "Vol%2d", (int)volume);
+        M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
         M5.Display.drawString(vl, 4, 100);
         _volBar(50, 98, W - 58, 12, (int)volume, 21);
     }

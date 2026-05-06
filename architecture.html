@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Internet Radio — Architecture</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: #0f1117;
+  color: #e2e8f0;
+  padding: 24px;
+  font-size: 13px;
+}
+h1 { color: #63b3ed; margin-bottom: 6px; font-size: 20px; }
+.subtitle { color: #718096; margin-bottom: 28px; font-size: 13px; }
+
+/* ── Layout ── */
+.diagram { display: flex; flex-direction: column; gap: 20px; }
+
+.row { display: flex; gap: 16px; align-items: flex-start; }
+.row.center { justify-content: center; }
+
+/* ── Cards ── */
+.card {
+  border-radius: 10px;
+  padding: 14px 16px;
+  border: 1px solid;
+  flex-shrink: 0;
+}
+.card-title {
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  margin-bottom: 8px;
+}
+.card-body { font-size: 12px; line-height: 1.7; color: #a0aec0; }
+.card-body b { color: #e2e8f0; }
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* Colours */
+.blue   { background: #1a3352; border-color: #2b6cb0; }
+.blue .card-title { color: #63b3ed; }
+
+.green  { background: #1a3a2a; border-color: #276749; }
+.green .card-title { color: #68d391; }
+
+.purple { background: #2d1f47; border-color: #6b46c1; }
+.purple .card-title { color: #b794f4; }
+
+.orange { background: #3a2210; border-color: #c05621; }
+.orange .card-title { color: #f6ad55; }
+
+.red    { background: #3a1010; border-color: #c53030; }
+.red .card-title { color: #fc8181; }
+
+.teal   { background: #0d2e30; border-color: #285e61; }
+.teal .card-title { color: #4fd1c5; }
+
+.grey   { background: #1a1f2e; border-color: #4a5568; }
+.grey .card-title { color: #a0aec0; }
+
+/* ── Dual-core box ── */
+.cores {
+  display: flex;
+  gap: 0;
+  border: 2px solid #4a5568;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.core {
+  flex: 1;
+  padding: 14px 16px;
+}
+.core0 { background: #1a2a3a; border-right: 2px dashed #4a5568; }
+.core1 { background: #1a3a2a; }
+.core-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .7px;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #4a5568;
+}
+.core0 .core-title { color: #63b3ed; }
+.core1 .core-title { color: #68d391; }
+
+/* ── Arrows ── */
+.arrows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+.arrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #a0aec0;
+}
+.arr-line {
+  flex: 1;
+  height: 1px;
+  position: relative;
+}
+.arr-line::after {
+  content: '▶';
+  position: absolute;
+  right: -2px;
+  top: -7px;
+  font-size: 10px;
+}
+.arr-line.left::after { content: '◀'; right: auto; left: -2px; }
+.arr-both { display: flex; align-items: center; }
+.arr-both::before { content: '◀'; font-size: 9px; margin-right: 3px; }
+.arr-both::after  { content: '▶'; font-size: 9px; margin-left:  3px; }
+
+/* colours for arrows */
+.blue-a   .arr-line { background: #4299e1; }
+.blue-a   .arr-line::after, .blue-a .arr-line::before { color: #4299e1; }
+.green-a  .arr-line { background: #48bb78; }
+.green-a  .arr-line::after { color: #48bb78; }
+.orange-a .arr-line { background: #ed8936; }
+.orange-a .arr-line::after { color: #ed8936; }
+.purple-a .arr-line { background: #9f7aea; }
+.purple-a .arr-line::after { color: #9f7aea; }
+.red-a    .arr-line { background: #fc8181; }
+.red-a    .arr-line::after { color: #fc8181; }
+.yellow-a .arr-line { background: #ecc94b; }
+.yellow-a .arr-line::after { color: #ecc94b; }
+
+/* ── Section labels ── */
+.section-label {
+  font-size: 11px;
+  color: #4a5568;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+  margin-top: 4px;
+}
+
+/* ── Flow diagrams ── */
+.flow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.step {
+  background: #2d3748;
+  border: 1px solid #4a5568;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.step.highlight { background: #2b4c7e; border-color: #3182ce; color: #bee3f8; }
+.step.warn      { background: #3a2a10; border-color: #c05621; color: #fed7aa; }
+.step.ok        { background: #1a3a2a; border-color: #276749; color: #c6f6d5; }
+.arr { color: #4a5568; font-size: 14px; line-height: 1; }
+
+/* ── Legend ── */
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #718096; }
+.legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+
+/* ── Shared state table ── */
+.state-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.state-table th { color: #718096; font-weight: 600; text-align: left; padding: 3px 6px; border-bottom: 1px solid #4a5568; }
+.state-table td { padding: 3px 6px; color: #a0aec0; border-bottom: 1px solid #2d3748; }
+.state-table td:first-child { color: #e2e8f0; font-family: monospace; font-size: 11px; }
+.volatile { color: #f6ad55 !important; }
+</style>
+</head>
+<body>
+
+<h1>🎙 Internet Radio — M5StickCPlus2</h1>
+<p class="subtitle">Архитектурный граф · sketch_apr28a</p>
+
+<div class="diagram">
+
+  <!-- ═══ ROW 1: Hardware + Boot flow ═══ -->
+  <div class="section-label">Старт устройства</div>
+  <div class="row">
+
+    <div class="card orange" style="width:200px">
+      <div class="card-title">⚙ Hardware</div>
+      <div class="card-body">
+        <b>M5StickCPlus2</b><br>
+        ESP32 · 240 MHz<br>
+        240×135 TFT дисплей<br>
+        Кнопки A&nbsp;&amp;&nbsp;B<br>
+        I2S аудио выход<br>
+        <br>
+        I2S BCLK → GPIO <b>26</b><br>
+        I2S LRC  → GPIO <b>0</b><br>
+        I2S DOUT → GPIO <b>25</b>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;justify-content:center;gap:6px;padding:20px 4px">
+      <div class="arrow orange-a">
+        <div class="arr-line" style="width:30px"></div>
+        <span>setup()</span>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+
+      <!-- Boot flow -->
+      <div class="card grey" style="width:460px">
+        <div class="card-title">🔁 Поток загрузки (setup)</div>
+        <div class="flow">
+          <div class="step">initDisplay()</div>
+          <div class="arr">→</div>
+          <div class="step">storeLoad()</div>
+          <div class="arr">→</div>
+          <div class="step">wm_loadCreds()</div>
+          <div class="arr">→</div>
+          <div class="step warn">нет WiFi?</div>
+        </div>
+        <div class="flow" style="margin-top:8px">
+          <div class="step warn" style="opacity:.4">AP Portal</div>
+          <div class="arr" style="color:#fc8181">←</div>
+          <span style="font-size:11px;color:#fc8181">да</span>
+          &nbsp;&nbsp;
+          <span style="font-size:11px;color:#68d391">нет →</span>
+          <div class="step">WiFi.begin()</div>
+          <div class="arr">→</div>
+          <div class="step ok">WL_CONNECTED</div>
+          <div class="arr">→</div>
+          <div class="step">webServerSetup()</div>
+        </div>
+        <div class="flow" style="margin-top:8px">
+          <div class="step">audio.setPinout()</div>
+          <div class="arr">→</div>
+          <div class="step">xQueueCreate(1)</div>
+          <div class="arr">→</div>
+          <div class="step highlight">xTaskCreatePinnedToCore Core 0</div>
+          <div class="arr">→</div>
+          <div class="step ok">connectStation(0)</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══ ROW 2: Two cores ═══ -->
+  <div class="section-label">FreeRTOS — два ядра (основная работа)</div>
+  <div class="row">
+    <div class="cores" style="width:100%">
+
+      <!-- Core 0 -->
+      <div class="core core0" style="flex:1">
+        <div class="core-title">🔵 Core 0 — audioTask (priority 2)</div>
+
+        <div class="card-body" style="margin-bottom:10px">
+          HTTP стриминг · декодирование · I2S вывод
+        </div>
+
+        <div class="flow">
+          <div class="step highlight">xQueueReceive(stationQueue)</div>
+          <div class="arr">→</div>
+          <div class="step">audio.connecttohost(url)</div>
+        </div>
+        <div style="margin: 8px 0 8px 20px; color:#4a5568; font-size:11px">↕ каждые 1 мс</div>
+        <div class="flow">
+          <div class="step">audio.loop()</div>
+          <div class="arr">→</div>
+          <div class="step">audio.isRunning()</div>
+          <div class="arr">→</div>
+          <div class="step ok">isPlaying = true/false</div>
+        </div>
+        <div style="margin-top:10px; font-size:11px; color:#718096">
+          Callbacks (Core 0):<br>
+          <span style="color:#b794f4">audio_showstreamtitle()</span> → обновляет <b>streamTitle[]</b>, ставит uiDirty<br>
+          audio_info / audio_bitrate / audio_eof_mp3 … → игнорируются
+        </div>
+      </div>
+
+      <!-- Shared state column -->
+      <div style="width:200px; background:#0d1117; padding:14px; border-right:2px dashed #4a5568;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#ecc94b;margin-bottom:10px">
+          ⚡ Shared State<br><span style="font-size:10px;color:#718096;font-weight:400">(volatile globals)</span>
+        </div>
+        <table class="state-table">
+          <tr><th>Переменная</th><th>Тип</th></tr>
+          <tr><td class="volatile">currentStation</td><td>int</td></tr>
+          <tr><td class="volatile">volume</td><td>int</td></tr>
+          <tr><td class="volatile">volumeMode</td><td>bool</td></tr>
+          <tr><td class="volatile">isPlaying</td><td>bool</td></tr>
+          <tr><td class="volatile">uiDirty</td><td>bool</td></tr>
+          <tr><td>streamTitle[]</td><td>char[128]</td></tr>
+          <tr><td>deviceIP[]</td><td>char[20]</td></tr>
+        </table>
+        <div style="margin-top:12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#63b3ed;margin-bottom:6px">
+          📬 RTOS Queue
+        </div>
+        <div style="font-size:11px;color:#a0aec0;line-height:1.7">
+          <b style="color:#e2e8f0">stationQueue</b><br>
+          глубина: 1 (overwrite)<br>
+          int idx:<br>
+          ≥0 → подключить<br>
+          -1 → остановить
+        </div>
+      </div>
+
+      <!-- Core 1 -->
+      <div class="core core1" style="flex:1">
+        <div class="core-title">🟢 Core 1 — loop() (priority 1)</div>
+
+        <div class="card-body" style="margin-bottom:10px">
+          Кнопки · дисплей · веб-сервер
+        </div>
+
+        <div class="flow">
+          <div class="step">handleButtons()</div>
+          <div class="arr">→</div>
+          <div class="step">tickSpectrum()</div>
+          <div class="arr">→</div>
+          <div class="step">webServerHandle()</div>
+          <div class="arr">→</div>
+          <div class="step ok">if uiDirty → drawUI()</div>
+        </div>
+
+        <div style="margin-top:12px;font-size:11px;color:#718096">
+          handleButtons() — логика кнопок:<br>
+          <span style="color:#e2e8f0">A одиночный</span> → следующая станция (после 350 мс ожидания)<br>
+          <span style="color:#e2e8f0">A двойной</span> → режим громкости<br>
+          <span style="color:#e2e8f0">B</span> → предыдущая станция / громкость–<br>
+          <span style="color:#e2e8f0">3 сек без нажатий</span> → выход из режима громкости
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══ ROW 3: Modules ═══ -->
+  <div class="section-label">Модули (.h файлы)</div>
+  <div class="row">
+
+    <div class="card teal" style="flex:1">
+      <div class="card-title">📡 wifi_manager.h</div>
+      <div class="card-body">
+        <b>wm_loadCreds()</b> — читает SSID/pass из NVS (Preferences)<br>
+        <b>wm_saveCreds()</b> — сохраняет credentials<br>
+        <b>runWifiSetup()</b> — блокирующий captive portal:<br>
+        &nbsp;• AP «RadioSetup» (open, 192.168.4.1)<br>
+        &nbsp;• DNSServer перехватывает все DNS → 192.168.4.1<br>
+        &nbsp;• WebServer с формой выбора WiFi<br>
+        &nbsp;• Сохраняет creds → ESP.restart()
+      </div>
+    </div>
+
+    <div class="card purple" style="flex:1">
+      <div class="card-title">💾 station_store.h</div>
+      <div class="card-body">
+        Объединяет встроенные (stations.h) + пользовательские станции<br><br>
+        <b>storeLoad()</b> — загружает из NVS: маску удалённых + custom<br>
+        <b>getStation(idx)</b> — виртуальный список: сначала не-удалённые built-in, потом custom<br>
+        <b>storeAdd(name, url)</b> — добавляет custom (max 30)<br>
+        <b>storeDeleteByIdx()</b> — помечает built-in как удалённую ИЛИ удаляет custom<br>
+        <b>storeRestoreBuiltins()</b> — сбрасывает маску удалений<br><br>
+        <span style="color:#f6ad55">NVS namespace: «radio_st»</span>
+      </div>
+    </div>
+
+    <div class="card blue" style="flex:1">
+      <div class="card-title">🌐 web_server.h</div>
+      <div class="card-body">
+        WebServer на порту <b>80</b> (Core 1)<br><br>
+        <b>GET /</b> — HTML страница управления<br>
+        <b>POST /play, /stop</b> — старт/стоп<br>
+        <b>POST /next, /prev</b> — переключение ±1<br>
+        <b style="color:#63b3ed">POST /select</b> — <span style="color:#63b3ed">прямой переход на станцию по idx</span><br>
+        <b>POST /add</b> — добавить станцию<br>
+        <b>POST /delete</b> — удалить по idx<br>
+        <b>POST /restore</b> — вернуть встроенные<br><br>
+        Все действия → <span style="color:#63b3ed">connectStation()</span> или <span style="color:#63b3ed">stopPlayback()</span>
+      </div>
+    </div>
+
+    <div class="card green" style="flex:1">
+      <div class="card-title">🖥 ui.h</div>
+      <div class="card-body">
+        <b>initDisplay()</b> — rotation=3, clear<br>
+        <b>drawUI()</b> — главный экран (по uiDirty):<br>
+        &nbsp;• Нормальный режим: название, stream title, счётчик, IP, громкость, спектр<br>
+        &nbsp;• Режим громкости: большое число + бар<br>
+        <b>tickSpectrum()</b> — каждые 80 мс анимирует 8 баров (random targets если isPlaying)<br>
+        <b>drawConnecting()</b> — экран подключения WiFi<br>
+        <b>drawAPMode()</b> — экран настройки AP
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══ ROW 4: Data flows ═══ -->
+  <div class="section-label">Потоки данных</div>
+
+  <div class="row" style="flex-wrap:wrap; gap:14px">
+
+    <div class="card grey" style="width:320px">
+      <div class="card-title">🎵 Поток воспроизведения</div>
+      <div class="flow" style="flex-direction:column; align-items:flex-start; gap:6px">
+        <div class="flow">
+          <div class="step warn">Кнопка A/B</div>
+          <div class="arr">→</div>
+          <div class="step">connectStation(idx)</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ xQueueOverwrite</div>
+        <div class="flow">
+          <div class="step highlight">stationQueue ← idx</div>
+          <div class="arr">→</div>
+          <div class="step">Core 0 получает</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓</div>
+        <div class="flow">
+          <div class="step">audio.connecttohost(url)</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ HTTP stream</div>
+        <div class="flow">
+          <div class="step ok">Декодирование MP3/AAC</div>
+          <div class="arr">→</div>
+          <div class="step ok">I2S → динамик</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card grey" style="width:280px">
+      <div class="card-title">🖥 Поток отображения</div>
+      <div class="flow" style="flex-direction:column; align-items:flex-start; gap:6px">
+        <div class="flow">
+          <div class="step">audio.isRunning()</div>
+          <div class="arr">→</div>
+          <div class="step ok">isPlaying</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓</div>
+        <div class="flow">
+          <div class="step">uiDirty = true</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ Core 1 loop()</div>
+        <div class="flow">
+          <div class="step highlight">drawUI()</div>
+          <div class="arr">→</div>
+          <div class="step ok">TFT экран</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ каждые 80 мс</div>
+        <div class="flow">
+          <div class="step">tickSpectrum()</div>
+          <div class="arr">→</div>
+          <div class="step">анимация</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card grey" style="width:290px">
+      <div class="card-title">🌐 Веб: next / prev / play</div>
+      <div class="flow" style="flex-direction:column; align-items:flex-start; gap:6px">
+        <div class="flow">
+          <div class="step warn">Браузер: POST /next</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ HTTP на IP устройства</div>
+        <div class="flow">
+          <div class="step">webServerHandle()</div>
+          <div class="arr">→</div>
+          <div class="step">_webHandleNext()</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ (currentStation ± 1) % total</div>
+        <div class="flow">
+          <div class="step highlight">connectStation(idx)</div>
+          <div class="arr">→</div>
+          <div class="step">Queue → Core 0</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓</div>
+        <div class="flow">
+          <div class="step ok">302 redirect → /</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card blue" style="width:290px">
+      <div class="card-title">🖱 Веб: переключение по клику (новое)</div>
+      <div class="flow" style="flex-direction:column; align-items:flex-start; gap:6px">
+        <div class="flow">
+          <div class="step warn">Клик ▶ в списке станций</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ кнопка отправляет</div>
+        <div class="flow">
+          <div class="step" style="border-color:#3182ce;color:#bee3f8">POST /select · idx=N</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ _webHandleSelect()</div>
+        <div class="flow">
+          <div class="step">проверка idx &lt; total</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ напрямую — без ±1</div>
+        <div class="flow">
+          <div class="step highlight">connectStation(N)</div>
+          <div class="arr">→</div>
+          <div class="step">Queue → Core 0</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓</div>
+        <div class="flow">
+          <div class="step ok">302 redirect → /</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card grey" style="width:280px">
+      <div class="card-title">📶 Метаданные потока</div>
+      <div class="flow" style="flex-direction:column; align-items:flex-start; gap:6px">
+        <div class="flow">
+          <div class="step">ICY метаданные в HTTP</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ ESP32-audioI2S парсит</div>
+        <div class="flow">
+          <div class="step highlight">audio_showstreamtitle()</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓</div>
+        <div class="flow">
+          <div class="step ok">streamTitle[] обновлён</div>
+          <div class="arr">→</div>
+          <div class="step">uiDirty = true</div>
+        </div>
+        <div style="margin-left:20px;color:#4a5568">↓ Core 1 drawUI()</div>
+        <div class="flow">
+          <div class="step ok">название трека на экране</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══ ROW 5: Station Store detail ═══ -->
+  <div class="section-label">Хранилище станций (NVS / station_store.h)</div>
+  <div class="row">
+    <div class="card grey" style="width:100%">
+      <div class="card-body" style="display:flex;gap:30px;flex-wrap:wrap">
+
+        <div style="flex:1;min-width:220px">
+          <div style="color:#b794f4;font-weight:700;margin-bottom:8px">📦 stations.h (flash)</div>
+          Массив <b>stations[]</b> — <b style="color:#68d391">10</b> встроенных станций<br>
+          <span style="color:#718096;font-size:11px">(TR-станции удалены)</span><br>
+          Каждая: <code style="color:#68d391">name, lang, url</code><br><br>
+          <span style="color:#f6ad55">_delMask[]</span> — битовая маска удалённых встроенных<br>
+          (хранится в NVS «radio_st»→«delmask»)
+        </div>
+
+        <div style="flex:1;min-width:220px">
+          <div style="color:#4fd1c5;font-weight:700;margin-bottom:8px">✏️ Custom (NVS)</div>
+          <b>_stN[][]</b> — имена (max 30 × 32 bytes)<br>
+          <b>_stU[][]</b> — URL-ы (max 30 × 200 bytes)<br>
+          <b>_stCount</b> — кол-во custom станций<br>
+          Хранятся в NVS: «n0», «u0», «n1», «u1»…
+        </div>
+
+        <div style="flex:1;min-width:220px">
+          <div style="color:#63b3ed;font-weight:700;margin-bottom:8px">🔢 getStation(playerIdx)</div>
+          Виртуальный список:<br>
+          1. Проходит built-in в порядке, <span style="color:#f6ad55">пропуская удалённые</span><br>
+          2. Затем идут custom станции<br>
+          <br>
+          playerIdx — позиция в этом «плоском» списке,<br>
+          именно он хранится в <span style="color:#e2e8f0">currentStation</span>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Legend ═══ -->
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#2b6cb0"></div> Core 1 / UI</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#276749"></div> Core 0 / Audio</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#6b46c1"></div> NVS хранилище</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#c05621"></div> Пользовательский ввод</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ecc94b"></div> Volatile shared state</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#285e61"></div> Сеть / HTTP</div>
+  </div>
+
+</div>
+</body>
+</html>

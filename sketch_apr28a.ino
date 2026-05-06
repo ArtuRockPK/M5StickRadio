@@ -1,24 +1,29 @@
 /*
  * Internet Radio for M5StickCPlus2
- * Requires library: ESP32-audioI2S
- * https://github.com/schreibfaul1/ESP32-audioI2S/wiki
+ * Libraries required:
+ *   - ESP32-audioI2S  https://github.com/schreibfaul1/ESP32-audioI2S
  *
  * Controls:
- *   A (single)  — next station
- *   B (single)  — previous station
- *   A (double)  — enter volume mode
- *   Volume mode: A = vol+,  B = vol-,  3s inactivity = auto-exit
+ *   A single       — next station
+ *   B click        — previous station
+ *   A double       — enter volume mode
+ *
+ * Controls — Volume mode:
+ *   A              — volume +
+ *   B click        — volume -
+ *   3s idle        — exit volume mode
  *
  * RTOS:
  *   Core 0 — audioTask  : HTTP + decode + I2S  (priority 2)
- *   Core 1 — loop()     : buttons + display     (priority 1)
+ *   Core 1 — loop()     : buttons + display + web server  (priority 1)
  */
 #include "M5StickCPlus2.h"
 #include "Arduino.h"
 #include "WiFi.h"
 #include "Audio.h"
-#include "secrets.h"
-#include "stations.h"
+#include "wifi_manager.h"
+#include "station_store.h"
+#include "web_server.h"
 #include "ui.h"
 
 #define I2S_BCLK 26
@@ -28,15 +33,17 @@
 #define VOLUME_TIMEOUT_MS 3000
 #define DOUBLE_CLICK_MS    350
 
+// ── Library objects ───────────────────────────────────────────────────────────
 Audio audio;
 
-// ── Shared state (read Core 1, written Core 0 + Core 1) ──────────────────────
+// ── Shared state ─────────────────────────────────────────────────────────────
 volatile int  currentStation = 0;
 volatile int  volume         = 15;
 volatile bool volumeMode     = false;
-volatile bool isPlaying      = false;  // set by audioTask via audio.isRunning()
+volatile bool isPlaying      = false;
 volatile bool uiDirty        = false;
 char          streamTitle[128] = "";
+char          deviceIP[20]     = "";
 
 // ── RTOS ─────────────────────────────────────────────────────────────────────
 static QueueHandle_t stationQueue;
@@ -56,10 +63,21 @@ void connectStation(int idx) {
     xQueueOverwrite(stationQueue, &idx);
 }
 
+void stopPlayback() {
+    streamTitle[0] = '\0';
+    isPlaying      = false;
+    uiDirty        = true;
+    int stop = -1;
+    xQueueOverwrite(stationQueue, &stop);
+}
+
+// ─── Button handling ──────────────────────────────────────────────────────────
+
 void handleButtons() {
     M5.update();
     const unsigned long now = millis();
 
+    // ── Button A ─────────────────────────────────────────────────────────────
     if (M5.BtnA.wasPressed()) {
         if (volumeMode) {
             int v = (int)volume + 1; if (v > 21) v = 21;
@@ -78,16 +96,18 @@ void handleButtons() {
 
     if (pendingClickA && !volumeMode && (now - lastPressA >= DOUBLE_CLICK_MS)) {
         pendingClickA = false;
-        connectStation(((int)currentStation + 1) % STATION_COUNT);
+        connectStation(((int)currentStation + 1) % getTotalStationCount());
     }
 
-    if (M5.BtnB.wasPressed()) {
+    // ── Button B ─────────────────────────────────────────────────────────────
+
+    if (M5.BtnB.wasClicked()) {
         if (volumeMode) {
             int v = (int)volume - 1; if (v < 0) v = 0;
             volume = v; audio.setVolume(v);
             lastActivity = now; uiDirty = true;
         } else {
-            connectStation(((int)currentStation - 1 + STATION_COUNT) % STATION_COUNT);
+            connectStation(((int)currentStation - 1 + getTotalStationCount()) % getTotalStationCount());
         }
     }
 
@@ -105,22 +125,24 @@ void audioTask(void *param) {
 
     for (;;) {
         if (xQueueReceive(stationQueue, &idx, 0) == pdTRUE) {
-            // Signal "connecting" before blocking HTTP call
-            isPlaying    = false;
-            prevRunning  = false;
-            uiDirty      = true;
-            audio.connecttohost(stations[idx].url);
+            isPlaying   = false;
+            prevRunning = false;
+            uiDirty     = true;
+            if (idx >= 0) {
+                StationEntry st = getStation(idx);
+                audio.connecttohost(st.url);
+            } else {
+                audio.stopSong();
+            }
         }
 
         audio.loop();
 
-        // audio.isRunning() is the authoritative source: true only when
-        // audio frames are actually being decoded and sent to I2S.
         const bool running = audio.isRunning();
         if (running != prevRunning) {
             prevRunning = running;
             isPlaying   = running;
-            uiDirty     = true;   // triggers drawUI() on Core 1
+            uiDirty     = true;
         }
 
         vTaskDelay(pdMS_TO_TICKS(1));
@@ -130,22 +152,47 @@ void audioTask(void *param) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void setup() {
+    Serial.begin(115200);
+    delay(200);
+
     auto cfg = M5.config();
     cfg.internal_mic = false;
     M5.begin(cfg);
 
     initDisplay();
-    drawConnecting();
+    storeLoad();   // load custom stations before audio task starts
 
-    WiFi.disconnect();
+    // ── WiFi provisioning ──────────────────────────────────────────────────
+    String ssid, pass;
+    if (!wm_loadCreds(ssid, pass)) {
+        drawAPMode();
+        runWifiSetup();   // blocks, then reboots
+        return;
+    }
+
+    drawConnecting();
     WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+
+    unsigned long t = millis();
     int dots = 0;
     while (WiFi.status() != WL_CONNECTED) {
+        if (millis() - t > 15000) {
+            // Connection timed out — go back to setup portal
+            drawAPMode();
+            runWifiSetup();   // blocks, then reboots
+            return;
+        }
         delay(500);
         drawConnectingProgress(++dots % 5);
     }
 
+    WiFi.localIP().toString().toCharArray(deviceIP, sizeof(deviceIP));
+
+    // ── Start web server (station management) ─────────────────────────────
+    webServerSetup();
+
+    // ── Audio ─────────────────────────────────────────────────────────────
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
     audio.setVolume((int)volume);
 
@@ -158,6 +205,7 @@ void setup() {
 void loop() {
     handleButtons();
     tickSpectrum();
+    webServerHandle();
     if (uiDirty) {
         uiDirty = false;
         drawUI();
@@ -171,12 +219,12 @@ void audio_showstreamtitle(const char *info) {
     streamTitle[sizeof(streamTitle) - 1] = '\0';
     uiDirty = true;
 }
-void audio_info(const char *info)        { Serial.println(info); }
-void audio_id3data(const char *info)     { Serial.print("id3: ");  Serial.println(info); }
-void audio_eof_mp3(const char *info)     { Serial.print("eof: ");  Serial.println(info); }
-void audio_showstation(const char *info) { Serial.print("stn: ");  Serial.println(info); }
-void audio_bitrate(const char *info)     { Serial.print("bps: ");  Serial.println(info); }
-void audio_commercial(const char *info)  { Serial.print("ad: ");   Serial.println(info); }
-void audio_icyurl(const char *info)      { Serial.print("url: ");  Serial.println(info); }
-void audio_lasthost(const char *info)    { Serial.print("host: "); Serial.println(info); }
-void audio_eof_speech(const char *info)  { Serial.print("tts: ");  Serial.println(info); }
+void audio_info(const char *info)        { (void)info; }
+void audio_id3data(const char *info)     { (void)info; }
+void audio_eof_mp3(const char *info)     { (void)info; }
+void audio_showstation(const char *info) { (void)info; }
+void audio_bitrate(const char *info)     { (void)info; }
+void audio_commercial(const char *info)  { (void)info; }
+void audio_icyurl(const char *info)      { (void)info; }
+void audio_lasthost(const char *info)    { (void)info; }
+void audio_eof_speech(const char *info)  { (void)info; }

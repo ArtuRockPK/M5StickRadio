@@ -1,4 +1,7 @@
+
+
 # 📻 M5StickRadio
+<img width="960" height="740" alt="photo_2026-05-06_20-33-46" src="https://github.com/user-attachments/assets/b7867a8b-c21e-445b-88a1-893ae6c0cc97" />
 
 > 🇬🇧 [English](#english) &nbsp;|&nbsp; 🇷🇺 [Русский](#русский)
 
